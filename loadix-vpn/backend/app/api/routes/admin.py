@@ -15,7 +15,7 @@ from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.trial import Trial
 from app.models.user import User  # noqa: F401
-from app.schemas.admin import BanIn, BroadcastIn, BroadcastOut, GrantIn, StatsOut, TrafficTopItem, UserSubscriptionItem, UserSubscriptionsPage
+from app.schemas.admin import BanIn, BroadcastIn, BroadcastOut, GrantIn, StatsOut, TrafficTopItem, TrafficTopOut, UserSubscriptionItem, UserSubscriptionsPage
 from app.schemas.subscription import DeviceWithQR, SubscriptionWithDevices
 from app.schemas.users import UserOut
 from app.services.audit import write_audit
@@ -89,6 +89,35 @@ async def admin_users_subscriptions(
         )
 
     return UserSubscriptionsPage(items=items, total=int(total), page=page, page_size=page_size)
+
+
+@router.get("/subscriptions/traffic-top", response_model=TrafficTopOut)
+async def admin_traffic_top(db: AsyncSession = Depends(get_db)) -> TrafficTopOut:
+    from app.models.plan import Plan
+
+    res = await db.execute(
+        select(Subscription)
+        .where(Subscription.status == SubscriptionStatus.ACTIVE.value)
+        .order_by(Subscription.traffic_used_bytes.desc())
+        .limit(20)
+    )
+    subs = list(res.scalars().all())
+
+    items: list[TrafficTopItem] = []
+    for sub in subs:
+        user = await db.get(User, sub.user_id) if sub.user_id else None
+        plan = await db.get(Plan, sub.plan_id)
+        items.append(
+            TrafficTopItem(
+                telegram_id=user.telegram_id if user else 0,
+                username=user.username if user else None,
+                plan_name=plan.name if plan else None,
+                traffic_used_bytes=sub.traffic_used_bytes,
+                traffic_limit_gb=sub.traffic_limit_gb,
+            )
+        )
+
+    return TrafficTopOut(items=items)
 
 
 @router.get("/users/{telegram_id}/full")

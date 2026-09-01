@@ -46,3 +46,15 @@ class UserSubscriptionsPage(BaseModel):
     total: int
     page: int
     page_size: int
+
+
+class TrafficTopItem(BaseModel):
+    telegram_id: int
+    username: str | None = None
+    plan_name: str | None = None
+    traffic_used_bytes: int
+    traffic_limit_gb: int
+
+
+class TrafficTopOut(BaseModel):
+    items: list[TrafficTopItem]
