@@ -12,6 +12,10 @@ def admin_menu() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="👤 Найти юзера", callback_data="adm:find"),
             ],
             [
+                InlineKeyboardButton(text="📋 Подписки", callback_data="adm:subs:0"),
+                InlineKeyboardButton(text="📈 Трафик", callback_data="adm:traffic"),
+            ],
+            [
                 InlineKeyboardButton(text="🎁 Выдать тариф", callback_data="adm:grant"),
                 InlineKeyboardButton(text="🚫 Бан / Анбан", callback_data="adm:ban"),
             ],
@@ -62,6 +66,17 @@ def admin_back() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[[InlineKeyboardButton(text="‹ В админку", callback_data="adm:menu")]]
     )
+
+
+def admin_subs_pagination(page: int, has_prev: bool, has_next: bool) -> InlineKeyboardMarkup:
+    nav_row = []
+    if has_prev:
+        nav_row.append(InlineKeyboardButton(text="◀ Назад", callback_data=f"adm:subs:{page - 1}"))
+    if has_next:
+        nav_row.append(InlineKeyboardButton(text="Вперёд ▶", callback_data=f"adm:subs:{page + 1}"))
+    rows = [nav_row] if nav_row else []
+    rows.append([InlineKeyboardButton(text="‹ В админку", callback_data="adm:menu")])
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def admin_grant_plans(plans: list[dict], target_id: int) -> InlineKeyboardMarkup:
