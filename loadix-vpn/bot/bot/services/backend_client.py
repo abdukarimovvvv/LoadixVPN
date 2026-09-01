@@ -245,6 +245,23 @@ async def admin_users(telegram_id: int, limit: int = 20, offset: int = 0) -> lis
     )
 
 
+async def admin_users_subscriptions(telegram_id: int, page: int = 0, page_size: int = 10) -> dict:
+    return await _request(
+        "GET",
+        "/api/admin/users/subscriptions",
+        telegram_id=telegram_id,
+        params={"page": page, "page_size": page_size},
+    )
+
+
+async def admin_traffic_top(telegram_id: int) -> dict:
+    return await _request(
+        "GET",
+        "/api/admin/subscriptions/traffic-top",
+        telegram_id=telegram_id,
+    )
+
+
 async def admin_user_card(telegram_id: int, target_id: int) -> dict:
     return await _request(
         "GET",
