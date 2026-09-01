@@ -1,0 +1,23 @@
+# Secrets / environment
+.env
+.env.*
+!.env.example
+
+# Python
+__pycache__/
+*.pyc
+.venv/
+venv/
+*.egg-info/
+
+# Node
+node_modules/
+
+# Playwright / MCP scratch
+.playwright-mcp/
+
+# OS
+.DS_Store
+
+# Superpowers scratch (progress ledger etc.)
+.superpowers/

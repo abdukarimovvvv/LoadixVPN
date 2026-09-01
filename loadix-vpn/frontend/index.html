@@ -1,0 +1,100 @@
+<!doctype html>
+<html lang="ru">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>LOADIX VPN — Trial</title>
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <style>
+    body { background: linear-gradient(135deg, #0f172a, #1e293b); color: #e2e8f0; min-height: 100vh; }
+    .hero { padding: 4rem 0 2rem; }
+    .card { background: #0b1220; border: 1px solid #1f2a44; }
+    .vless-box { background: #050a18; border-radius: .5rem; padding: 1rem; word-break: break-all; font-family: monospace; font-size: .85rem; color: #94a3b8; }
+    .qr { background: #fff; padding: .75rem; border-radius: .5rem; display: inline-block; }
+    .btn-loadix { background: #22d3ee; color: #06121f; border: none; }
+    .btn-loadix:hover { background: #67e8f9; color: #06121f; }
+  </style>
+</head>
+<body>
+  <div class="container hero">
+    <div class="row align-items-center">
+      <div class="col-lg-7">
+        <h1 class="display-4 fw-bold">⚡ LOADIX VPN</h1>
+        <p class="lead">Telegram-first VPN на базе <b>VLESS Reality</b>. Без логов. Быстрая выдача ключей. Поддержка iOS, Android, Windows, macOS.</p>
+        <ul class="list-unstyled small text-muted">
+          <li>🎁 Бесплатный Trial — 24 часа, 1 GB</li>
+          <li>🔐 Reality-протокол: незаметен для DPI</li>
+          <li>📱 QR-код и VLESS URI сразу после регистрации</li>
+        </ul>
+      </div>
+      <div class="col-lg-5">
+        <div class="card p-4 shadow-lg">
+          <h3 class="h5 mb-3">Получить бесплатный Trial</h3>
+          <form id="trial-form">
+            <div class="mb-3">
+              <label class="form-label small">Email (необязательно)</label>
+              <input type="email" class="form-control" id="email" placeholder="you@example.com">
+            </div>
+            <button class="btn btn-loadix w-100 fw-semibold" type="submit">Получить ключ</button>
+          </form>
+          <div id="error" class="alert alert-danger mt-3 d-none"></div>
+        </div>
+      </div>
+    </div>
+
+    <div id="result" class="card p-4 mt-4 d-none">
+      <h3 class="h5 mb-3">Ваш Trial-ключ</h3>
+      <div class="row g-3 align-items-center">
+        <div class="col-md-4 text-center">
+          <div class="qr">
+            <img id="qr-img" alt="QR" style="max-width:100%;">
+          </div>
+        </div>
+        <div class="col-md-8">
+          <div class="small text-muted">Действует до:</div>
+          <div id="expire" class="mb-2 fw-semibold"></div>
+          <div class="small text-muted">Лимит трафика:</div>
+          <div id="traffic" class="mb-3 fw-semibold"></div>
+          <div class="small text-muted">VLESS URI:</div>
+          <div class="vless-box" id="uri"></div>
+          <a id="bot-link" class="btn btn-outline-info mt-3" target="_blank">Открыть Telegram-бот</a>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const form = document.getElementById('trial-form');
+    const result = document.getElementById('result');
+    const errBox = document.getElementById('error');
+
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      errBox.classList.add('d-none');
+      const email = document.getElementById('email').value || null;
+      try {
+        const r = await fetch('/api/trial', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ email, user_agent: navigator.userAgent })
+        });
+        if (!r.ok) {
+          const j = await r.json().catch(() => ({}));
+          throw new Error(j.detail || ('HTTP ' + r.status));
+        }
+        const data = await r.json();
+        document.getElementById('qr-img').src = 'data:image/png;base64,' + data.qr_base64;
+        document.getElementById('expire').textContent = new Date(data.expire_date).toLocaleString();
+        document.getElementById('traffic').textContent = data.traffic_limit_gb + ' GB';
+        document.getElementById('uri').textContent = data.vless_uri;
+        document.getElementById('bot-link').href = data.bot_url;
+        result.classList.remove('d-none');
+        result.scrollIntoView({ behavior: 'smooth' });
+      } catch (err) {
+        errBox.textContent = err.message || 'Ошибка';
+        errBox.classList.remove('d-none');
+      }
+    });
+  </script>
+</body>
+</html>
