@@ -21,3 +21,8 @@ node_modules/
 
 # Superpowers scratch (progress ledger etc.)
 .superpowers/
+
+# Claude Code local settings — contains permission allowlist entries that
+# have historically embedded live credentials (SSH passwords, bot tokens)
+# inline in Bash command patterns. Never commit this directory.
+.claude/
