@@ -15,7 +15,7 @@ from app.models.payment import Payment
 from app.models.subscription import Subscription
 from app.models.trial import Trial
 from app.models.user import User  # noqa: F401
-from app.schemas.admin import BanIn, BroadcastIn, BroadcastOut, GrantIn, StatsOut
+from app.schemas.admin import BanIn, BroadcastIn, BroadcastOut, GrantIn, StatsOut, TrafficTopItem, UserSubscriptionItem, UserSubscriptionsPage
 from app.schemas.subscription import DeviceWithQR, SubscriptionWithDevices
 from app.schemas.users import UserOut
 from app.services.audit import write_audit
@@ -38,6 +38,57 @@ router = APIRouter(prefix="/admin", dependencies=[Depends(require_admin_telegram
 async def admin_users(limit: int = 100, offset: int = 0, db: AsyncSession = Depends(get_db)) -> list[UserOut]:
     res = await db.execute(select(User).order_by(User.created_at.desc()).limit(limit).offset(offset))
     return [UserOut.model_validate(u) for u in res.scalars().all()]
+
+
+@router.get("/users/subscriptions", response_model=UserSubscriptionsPage)
+async def admin_users_subscriptions(
+    page: int = 0, page_size: int = 10, db: AsyncSession = Depends(get_db)
+) -> UserSubscriptionsPage:
+    from app.models.plan import Plan
+
+    if page < 0:
+        page = 0
+    if page_size < 1 or page_size > 100:
+        page_size = 10
+
+    total = (await db.execute(select(func.count(User.id)))).scalar_one()
+
+    res = await db.execute(
+        select(User)
+        .order_by(User.created_at.desc())
+        .limit(page_size)
+        .offset(page * page_size)
+    )
+    users = list(res.scalars().all())
+
+    items: list[UserSubscriptionItem] = []
+    for u in users:
+        res2 = await db.execute(
+            select(Subscription)
+            .where(Subscription.user_id == u.id)
+            .order_by(Subscription.start_date.desc())
+            .limit(1)
+        )
+        sub = res2.scalar_one_or_none()
+        plan_name = None
+        status = None
+        expire_date = None
+        if sub is not None:
+            status = sub.status
+            expire_date = sub.expire_date.isoformat()
+            plan = await db.get(Plan, sub.plan_id)
+            plan_name = plan.name if plan else None
+        items.append(
+            UserSubscriptionItem(
+                telegram_id=u.telegram_id,
+                username=u.username,
+                plan_name=plan_name,
+                status=status,
+                expire_date=expire_date,
+            )
+        )
+
+    return UserSubscriptionsPage(items=items, total=int(total), page=page, page_size=page_size)
 
 
 @router.get("/users/{telegram_id}/full")

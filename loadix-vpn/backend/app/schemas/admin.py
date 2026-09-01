@@ -31,3 +31,18 @@ class GrantIn(BaseModel):
     telegram_id: int
     username: str | None = None
     plan_code: str
+
+
+class UserSubscriptionItem(BaseModel):
+    telegram_id: int
+    username: str | None = None
+    plan_name: str | None = None
+    status: str | None = None
+    expire_date: str | None = None
+
+
+class UserSubscriptionsPage(BaseModel):
+    items: list[UserSubscriptionItem]
+    total: int
+    page: int
+    page_size: int
