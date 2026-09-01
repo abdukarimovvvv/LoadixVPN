@@ -107,7 +107,13 @@ async def _render_subs(message: Message, telegram_id: int, page: int = 0, edit: 
     total = data.get("total", 0)
     page_size = data.get("page_size", 10)
     if not items:
-        await _render(message, "Пользователей нет.", admin_back(), edit)
+        if page > 0 and total:
+            await _render(
+                message, "Эта страница пуста.",
+                admin_subs_pagination(page, has_prev=True, has_next=False), edit,
+            )
+        else:
+            await _render(message, "Пользователей нет.", admin_back(), edit)
         return
     total_pages = max(1, (total + page_size - 1) // page_size)
     lines = [f"📋 <b>Подписки пользователей</b> (стр. {page + 1}/{total_pages}, всего {total})\n"]
@@ -297,7 +303,10 @@ async def cb_subs(cb: CallbackQuery) -> None:
     if not cb.from_user or not _is_admin(cb.from_user.id) or not cb.message:
         await cb.answer()
         return
-    page = int(cb.data.split(":", 2)[2])
+    try:
+        page = int(cb.data.split(":", 2)[2])
+    except ValueError:
+        page = 0
     await _render_subs(cb.message, cb.from_user.id, page=page, edit=True)
     await cb.answer()
 
