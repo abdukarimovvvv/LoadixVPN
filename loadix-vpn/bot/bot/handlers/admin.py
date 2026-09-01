@@ -10,7 +10,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, Message
 
 from bot.app_env import settings
-from bot.keyboards.admin import admin_back, admin_grant_plans, admin_menu, promo_list_actions, promo_menu, user_card_actions
+from bot.keyboards.admin import admin_back, admin_grant_plans, admin_menu, admin_subs_pagination, promo_list_actions, promo_menu, user_card_actions
 from bot.services.backend_client import (
     BackendError,
     admin_ban,
@@ -21,8 +21,10 @@ from bot.services.backend_client import (
     admin_promo_toggle,
     admin_revoke_subscription,
     admin_stats,
+    admin_traffic_top,
     admin_user_card,
     admin_users,
+    admin_users_subscriptions,
     list_plans,
 )
 from bot.services.screen import screen_text
@@ -89,6 +91,61 @@ async def _render_users(message: Message, telegram_id: int, edit: bool = False) 
         raw_username = u.get("username") or ""
         username = f"@{html.escape(raw_username)}" if raw_username else "—"
         lines.append(f"{flag} <code>{u['telegram_id']}</code> {username}")
+    await _render(message, "\n".join(lines), admin_back(), edit)
+
+
+_STATUS_LABEL = {"active": "✅ активна", "expired": "⏳ истекла", "disabled": "⛔ отключена"}
+
+
+async def _render_subs(message: Message, telegram_id: int, page: int = 0, edit: bool = False) -> None:
+    try:
+        data = await admin_users_subscriptions(telegram_id, page=page, page_size=10)
+    except BackendError as e:
+        await _render(message, f"⚠️ Ошибка: {e.message}", admin_back(), edit)
+        return
+    items = data.get("items", [])
+    total = data.get("total", 0)
+    page_size = data.get("page_size", 10)
+    if not items:
+        await _render(message, "Пользователей нет.", admin_back(), edit)
+        return
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    lines = [f"📋 <b>Подписки пользователей</b> (стр. {page + 1}/{total_pages}, всего {total})\n"]
+    for it in items:
+        raw_username = it.get("username") or ""
+        username = f"@{html.escape(raw_username)}" if raw_username else "—"
+        lines.append(f"🆔 <code>{it['telegram_id']}</code> {username}")
+        if it.get("plan_name"):
+            status = _STATUS_LABEL.get(it.get("status") or "", it.get("status") or "—")
+            expire = (it.get("expire_date") or "")[:10] or "—"
+            lines.append(f"   📦 {html.escape(it['plan_name'])} · {status} · до {expire}")
+        else:
+            lines.append("   — нет подписки")
+    kb = admin_subs_pagination(page, has_prev=page > 0, has_next=(page + 1) * page_size < total)
+    await _render(message, "\n".join(lines), kb, edit)
+
+
+async def _render_traffic(message: Message, telegram_id: int, edit: bool = False) -> None:
+    try:
+        data = await admin_traffic_top(telegram_id)
+    except BackendError as e:
+        await _render(message, f"⚠️ Ошибка: {e.message}", admin_back(), edit)
+        return
+    items = data.get("items", [])
+    if not items:
+        await _render(message, "Активных подписок с трафиком нет.", admin_back(), edit)
+        return
+    lines = ["📈 <b>Топ по расходу трафика</b> (среди активных)\n"]
+    for i, it in enumerate(items, start=1):
+        raw_username = it.get("username") or ""
+        username = f"@{html.escape(raw_username)}" if raw_username else "—"
+        used_gb = (it.get("traffic_used_bytes") or 0) / (1024 ** 3)
+        limit_gb = it.get("traffic_limit_gb") or 0
+        limit_label = "∞" if limit_gb == 0 else f"{limit_gb}"
+        pct = f" ({used_gb / limit_gb * 100:.0f}%)" if limit_gb else ""
+        plan_name = html.escape(it["plan_name"]) if it.get("plan_name") else "—"
+        lines.append(f"#{i} 🆔 <code>{it['telegram_id']}</code> {username}")
+        lines.append(f"   📦 {plan_name} · {used_gb:.2f} GB / {limit_label} GB{pct}")
     await _render(message, "\n".join(lines), admin_back(), edit)
 
 
@@ -232,6 +289,25 @@ async def cb_users(cb: CallbackQuery) -> None:
         await cb.answer()
         return
     await _render_users(cb.message, cb.from_user.id, edit=True)
+    await cb.answer()
+
+
+@router.callback_query(F.data.startswith("adm:subs:"))
+async def cb_subs(cb: CallbackQuery) -> None:
+    if not cb.from_user or not _is_admin(cb.from_user.id) or not cb.message:
+        await cb.answer()
+        return
+    page = int(cb.data.split(":", 2)[2])
+    await _render_subs(cb.message, cb.from_user.id, page=page, edit=True)
+    await cb.answer()
+
+
+@router.callback_query(F.data == "adm:traffic")
+async def cb_traffic(cb: CallbackQuery) -> None:
+    if not cb.from_user or not _is_admin(cb.from_user.id) or not cb.message:
+        await cb.answer()
+        return
+    await _render_traffic(cb.message, cb.from_user.id, edit=True)
     await cb.answer()
 
 
