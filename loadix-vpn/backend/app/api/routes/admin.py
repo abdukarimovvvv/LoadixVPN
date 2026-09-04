@@ -66,7 +66,10 @@ async def admin_users_subscriptions(
         res2 = await db.execute(
             select(Subscription)
             .where(Subscription.user_id == u.id)
-            .order_by(Subscription.start_date.desc())
+            .order_by(
+                (Subscription.status == SubscriptionStatus.ACTIVE.value).desc(),
+                Subscription.start_date.desc(),
+            )
             .limit(1)
         )
         sub = res2.scalar_one_or_none()
