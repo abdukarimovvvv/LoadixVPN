@@ -116,17 +116,21 @@ async def _render_subs(message: Message, telegram_id: int, page: int = 0, edit: 
             await _render(message, "Пользователей нет.", admin_back(), edit)
         return
     total_pages = max(1, (total + page_size - 1) // page_size)
-    lines = [f"📋 <b>Подписки пользователей</b> (стр. {page + 1}/{total_pages}, всего {total})\n"]
+    lines = [
+        f"📋 <b>Подписки пользователей</b>",
+        f"<i>Страница {page + 1} из {total_pages} · всего {total}</i>",
+    ]
     for it in items:
         raw_username = it.get("username") or ""
-        username = f"@{html.escape(raw_username)}" if raw_username else "—"
-        lines.append(f"🆔 <code>{it['telegram_id']}</code> {username}")
+        username = f"@{html.escape(raw_username)}" if raw_username else "без username"
+        lines.append("")
+        lines.append(f"👤 <code>{it['telegram_id']}</code> ({username})")
         if it.get("plan_name"):
             status = _STATUS_LABEL.get(it.get("status") or "", it.get("status") or "—")
             expire = (it.get("expire_date") or "")[:10] or "—"
-            lines.append(f"   📦 {html.escape(it['plan_name'])} · {status} · до {expire}")
+            lines.append(f"┗ 📦 {html.escape(it['plan_name'])} · {status} · до {expire}")
         else:
-            lines.append("   — нет подписки")
+            lines.append("┗ — нет подписки")
     kb = admin_subs_pagination(page, has_prev=page > 0, has_next=(page + 1) * page_size < total)
     await _render(message, "\n".join(lines), kb, edit)
 
@@ -141,17 +145,23 @@ async def _render_traffic(message: Message, telegram_id: int, edit: bool = False
     if not items:
         await _render(message, "Активных подписок с трафиком нет.", admin_back(), edit)
         return
-    lines = ["📈 <b>Топ по расходу трафика</b> (среди активных)\n"]
+    _MEDALS = {1: "🥇", 2: "🥈", 3: "🥉"}
+    lines = [
+        "📈 <b>Топ по расходу трафика</b>",
+        "<i>Среди активных подписок</i>",
+    ]
     for i, it in enumerate(items, start=1):
         raw_username = it.get("username") or ""
-        username = f"@{html.escape(raw_username)}" if raw_username else "—"
+        username = f"@{html.escape(raw_username)}" if raw_username else "без username"
         used_gb = (it.get("traffic_used_bytes") or 0) / (1024 ** 3)
         limit_gb = it.get("traffic_limit_gb") or 0
-        limit_label = "∞" if limit_gb == 0 else f"{limit_gb}"
-        pct = f" ({used_gb / limit_gb * 100:.0f}%)" if limit_gb else ""
+        limit_label = "безлимит" if limit_gb == 0 else f"{limit_gb} GB"
+        pct = f" · {used_gb / limit_gb * 100:.0f}%" if limit_gb else ""
         plan_name = html.escape(it["plan_name"]) if it.get("plan_name") else "—"
-        lines.append(f"#{i} 🆔 <code>{it['telegram_id']}</code> {username}")
-        lines.append(f"   📦 {plan_name} · {used_gb:.2f} GB / {limit_label} GB{pct}")
+        rank = _MEDALS.get(i, f"#{i}")
+        lines.append("")
+        lines.append(f"{rank} <code>{it['telegram_id']}</code> ({username})")
+        lines.append(f"┗ 📦 {plan_name} · {used_gb:.2f} / {limit_label}{pct}")
     await _render(message, "\n".join(lines), admin_back(), edit)
 
 
