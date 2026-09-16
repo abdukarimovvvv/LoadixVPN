@@ -237,17 +237,20 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
             return
         config_text = result["config"]
         file_name = f"loadix-wg-{(name or 'vpn').replace(' ', '_')}.conf"
-        await cb.message.answer_document(
-            BufferedInputFile(config_text.encode(), filename=file_name),
+        png = base64.b64decode(result["qr_base64"])
+        await cb.message.answer_photo(
+            BufferedInputFile(png, filename="loadix-wg.png"),
             caption=(
                 "✅ <b>WireGuard конфиг готов</b>\n\n"
                 "📲 Как использовать:\n"
-                "• <b>Android/iOS</b>: приложение <b>WireGuard</b> → импортировать файл\n"
-                "• <b>Amnezia VPN</b>: импортировать конфиг\n"
-                "• <b>Windows/Mac</b>: WireGuard клиент → Import tunnel from file\n\n"
+                "• <b>Android/iOS</b>: приложение <b>WireGuard</b> → «+» → Сканировать QR-код\n"
+                "• Или импортируйте файл конфига ниже\n\n"
                 "⚠️ Не работает? Попробуйте VLESS или OpenVPN — /myvpn → Добавить устройство."
             ),
             parse_mode="HTML",
+        )
+        await cb.message.answer_document(
+            BufferedInputFile(config_text.encode(), filename=file_name),
         )
 
     elif protocol == "openvpn":

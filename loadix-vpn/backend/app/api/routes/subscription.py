@@ -224,7 +224,7 @@ async def get_wireguard_config(
         config = await wg_generate(name)
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    return VpnRawConfigOut(config=config, protocol="wireguard")
+    return VpnRawConfigOut(config=config, protocol="wireguard", qr_base64=make_qr_png_base64(config))
 
 
 @router.post("/subscription/{telegram_id}/openvpn", response_model=VpnRawConfigOut)
@@ -249,7 +249,7 @@ async def get_openvpn_config(
         config = await ovpn_generate(name)
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    return VpnRawConfigOut(config=config, protocol="openvpn")
+    return VpnRawConfigOut(config=config, protocol="openvpn", qr_base64=make_qr_png_base64(config))
 
 
 @router.post("/subscription/{telegram_id}/devices/{device_id}/rotate", response_model=DeviceWithQR)

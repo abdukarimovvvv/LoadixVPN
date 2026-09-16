@@ -7,8 +7,8 @@ import uuid
 log = logging.getLogger(__name__)
 
 OVN_CONTAINER = "amnezia-openvpn"
-PKI_DIR = "/opt/amnezia/openvpn"
-SERVER_IP = "2.26.1.62"
+PKI_DIR = "/etc/openvpn"
+SERVER_IP = "57.131.153.153"
 SERVER_PORT = 34949
 
 

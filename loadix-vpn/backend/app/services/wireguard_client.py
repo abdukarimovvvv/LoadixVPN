@@ -10,7 +10,7 @@ WG_CONTAINER = "amnezia-wireguard"
 WG_CONF = "/opt/amnezia/wireguard/wg0.conf"
 WG_PSK_FILE = "/opt/amnezia/wireguard/wireguard_psk.key"
 WG_SRV_PUB_FILE = "/opt/amnezia/wireguard/wireguard_server_public_key.key"
-SERVER_IP = "2.26.1.62"
+SERVER_IP = "57.131.153.153"
 SERVER_PORT = 44327
 DNS = "1.1.1.1, 8.8.8.8"
 
@@ -53,7 +53,8 @@ async def generate(name: str) -> str:
     # 3. Find next available client IP
     conf_text = await _exec(WG_CONTAINER, "cat", WG_CONF)
     used = {int(m) for m in re.findall(r"AllowedIPs\s*=\s*10\.8\.1\.(\d+)/32", conf_text)}
-    n = 1
+    used.add(1)  # 10.8.1.1 is the server's own wg0 address, never assign it to a client
+    n = 2
     while n in used:
         n += 1
     client_ip = f"10.8.1.{n}"
