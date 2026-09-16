@@ -75,15 +75,37 @@ def _list_text(sub: dict) -> str:
 
 def _device_caption(sub: dict, dev: dict) -> str:
     traffic_limit = "♾ безлимит" if not sub.get("traffic_limit_gb") else f"{sub['traffic_limit_gb']} GB"
-    return (
+    header = (
         f"📱 <b>{dev.get('name') or 'Устройство'}</b>\n"
         f"📅 Действует до: <b>{_fmt_expire(sub['expire_date'])}</b>\n"
         f"📦 Трафик: <b>{traffic_limit}</b>\n\n"
         "⚠️ <b>Этот ключ — только для одного устройства.</b>\n"
-        "Если поставите тот же QR на второе устройство — оба перестанут работать. Для второго гаджета жмите «🆕 Добавить устройство» в списке.\n\n"
-        "👇 Сканируй QR в v2RayTun / Amnezia / Hiddify (или скопируй ссылку):\n\n"
-        f"<code>{dev['vless_uri']}</code>"
+        "Если поставите тот же QR/файл на второе устройство — оба перестанут работать. "
+        "Для второго гаджета жмите «🆕 Добавить устройство» в списке.\n\n"
     )
+    protocol = dev.get("protocol", "vless")
+    if protocol == "vless":
+        return header + (
+            "👇 Сканируй QR в v2RayTun / Amnezia / Hiddify (или скопируй ссылку):\n\n"
+            f"<code>{dev['vless_uri']}</code>"
+        )
+    if protocol == "wireguard":
+        return header + "👇 Сканируй QR в приложении WireGuard, или используй файл конфига ниже."
+    return header + "👇 Импортируйте файл конфига ниже в OpenVPN Connect."
+
+
+async def _send_device_card(message: Message, sub: dict, dev: dict, *, can_delete: bool, prefix: str = "") -> None:
+    caption = prefix + _device_caption(sub, dev)
+    kb = device_actions_kb(dev["id"], can_delete=can_delete)
+    if dev.get("qr_base64"):
+        png = base64.b64decode(dev["qr_base64"])
+        await screen_photo(message, BufferedInputFile(png, filename="loadix-key.png"), caption, reply_markup=kb, delete_user_msg=False)
+    else:
+        await screen_text(message, caption, reply_markup=kb, delete_user_msg=False)
+    if dev.get("protocol") in ("wireguard", "openvpn") and dev.get("raw_config"):
+        ext = "conf" if dev["protocol"] == "wireguard" else "ovpn"
+        file_name = f"loadix-{dev['protocol']}-{(dev.get('name') or 'vpn').replace(' ', '_')}.{ext}"
+        await message.answer_document(BufferedInputFile(dev["raw_config"].encode(), filename=file_name))
 
 
 async def send_myvpn(message: Message, telegram_id: int) -> None:
@@ -137,14 +159,7 @@ async def cb_show(cb: CallbackQuery) -> None:
     if not dev:
         await cb.answer("Устройство не найдено", show_alert=True)
         return
-    png = base64.b64decode(dev["qr_base64"])
-    await screen_photo(
-        cb.message,
-        BufferedInputFile(png, filename="loadix-key.png"),
-        _device_caption(sub, dev),
-        reply_markup=device_actions_kb(dev["id"], can_delete=len(devices) > 1),
-        delete_user_msg=False,
-    )
+    await _send_device_card(cb.message, sub, dev, can_delete=len(devices) > 1)
     await cb.answer()
 
 
@@ -231,6 +246,8 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
         except BackendError as e:
             if e.status_code == 404:
                 await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+            elif e.status_code == 409:
+                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
             else:
                 log.warning("wireguard config failed: %s", e)
                 await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
@@ -259,6 +276,8 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
         except BackendError as e:
             if e.status_code == 404:
                 await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+            elif e.status_code == 409:
+                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
             else:
                 log.warning("openvpn config failed: %s", e)
                 await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
@@ -298,13 +317,10 @@ async def cb_rotate(cb: CallbackQuery) -> None:
         sub = await get_subscription(cb.from_user.id)
     except BackendError:
         return
-    png = base64.b64decode(dev["qr_base64"])
-    await screen_photo(
-        cb.message,
-        BufferedInputFile(png, filename="loadix-key.png"),
-        "✨ <b>Новый ключ</b> — старый перестал работать.\n\n" + _device_caption(sub, dev),
-        reply_markup=device_actions_kb(dev["id"], can_delete=len(sub["devices"]) > 1),
-        delete_user_msg=False,
+    await _send_device_card(
+        cb.message, sub, dev,
+        can_delete=len(sub["devices"]) > 1,
+        prefix="✨ <b>Новый ключ</b> — старый перестал работать.\n\n",
     )
 
 

@@ -181,6 +181,7 @@ async def admin_user_card(telegram_id: int, db: AsyncSession = Depends(get_db)) 
                 {
                     "id": str(d.id),
                     "name": d.name,
+                    "protocol": d.protocol,
                     "xui_email": d.xui_email,
                     "client_uuid": d.client_uuid,
                     "created_at": d.created_at.isoformat(),
@@ -248,6 +249,8 @@ async def admin_ban_user(
     affected_devices = 0
     for sub in subs:
         for dev in sub.devices:
+            if dev.protocol != "vless":
+                continue
             affected_devices += 1
             try:
                 if payload.ban:
@@ -370,11 +373,17 @@ async def admin_grant(
         devices=[
             DeviceWithQR(
                 id=d.id,
+                protocol=d.protocol,
                 client_uuid=d.client_uuid,
                 name=d.name,
                 vless_uri=d.vless_uri,
+                raw_config=d.raw_config,
                 created_at=d.created_at,
-                qr_base64=make_qr_png_base64(d.vless_uri),
+                qr_base64=(
+                    make_qr_png_base64(d.vless_uri if d.protocol == "vless" else d.raw_config)
+                    if d.protocol in ("vless", "wireguard")
+                    else None
+                ),
             )
             for d in sub.devices
         ],

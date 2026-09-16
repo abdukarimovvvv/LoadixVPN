@@ -29,6 +29,8 @@ async def _expire_overdue() -> None:
         overdue = list(res.scalars().all())
         for sub in overdue:
             for dev in sub.devices:
+                if dev.protocol != "vless":
+                    continue
                 try:
                     await xui.disable_client(dev.client_uuid, dev.xui_email)
                 except Exception as e:
@@ -86,6 +88,8 @@ async def _check_traffic() -> None:
         for sub in subs:
             total_used = 0
             for dev in sub.devices:
+                if dev.protocol != "vless":
+                    continue  # WireGuard/OpenVPN traffic isn't tracked yet
                 try:
                     used = await xui.get_client_traffic(dev.xui_email)
                     total_used += used
@@ -96,6 +100,8 @@ async def _check_traffic() -> None:
             limit_bytes = sub.traffic_limit_gb * 1024 ** 3
             if limit_bytes and total_used >= limit_bytes:
                 for dev in sub.devices:
+                    if dev.protocol != "vless":
+                        continue
                     try:
                         await xui.disable_client(dev.client_uuid, dev.xui_email)
                     except Exception:

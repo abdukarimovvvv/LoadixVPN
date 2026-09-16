@@ -20,10 +20,12 @@ class Device(Base):
         index=True,
         nullable=False,
     )
-    client_uuid: Mapped[str] = mapped_column(String(64), unique=True, nullable=False)
-    xui_email: Mapped[str] = mapped_column(String(128), unique=True, nullable=False)
+    protocol: Mapped[str] = mapped_column(String(16), nullable=False, server_default="vless")
+    client_uuid: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
+    xui_email: Mapped[str | None] = mapped_column(String(128), unique=True, nullable=True)
     name: Mapped[str | None] = mapped_column(String(64), nullable=True)
-    vless_uri: Mapped[str] = mapped_column(String, nullable=False)
+    vless_uri: Mapped[str | None] = mapped_column(String, nullable=True)
+    raw_config: Mapped[str | None] = mapped_column(String, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     subscription = relationship("Subscription", back_populates="devices")

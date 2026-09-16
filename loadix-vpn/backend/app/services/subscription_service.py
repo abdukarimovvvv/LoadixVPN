@@ -180,6 +180,8 @@ async def renew_subscription(db: AsyncSession, sub: Subscription, plan: Plan) ->
 
     expire_ts_ms = int(sub.expire_date.timestamp() * 1000)
     for dev in sub.devices:
+        if dev.protocol != "vless":
+            continue  # WireGuard/OpenVPN peers have no per-device expiry/limit in xui
         try:
             await _update_xui_client(
                 client_uuid=dev.client_uuid,
@@ -213,21 +215,89 @@ async def add_device(
     )
 
 
+async def add_wireguard_device(
+    db: AsyncSession,
+    *,
+    sub: Subscription,
+    name: str | None,
+) -> tuple[Device, str]:
+    """Generate a WireGuard peer, store it as a Device (counts toward
+    device_limit like VLESS), and return (device, config_text)."""
+    from app.services.wireguard_client import generate as wg_generate
+
+    if len(sub.devices) >= sub.device_limit:
+        raise ValueError("device_limit_reached")
+    device_name = name or f"Устройство {len(sub.devices) + 1}"
+    config_text = await wg_generate(device_name)
+    device = Device(
+        subscription_id=sub.id,
+        protocol="wireguard",
+        name=device_name,
+        raw_config=config_text,
+    )
+    db.add(device)
+    await db.flush()
+    return device, config_text
+
+
+async def add_openvpn_device(
+    db: AsyncSession,
+    *,
+    sub: Subscription,
+    name: str | None,
+) -> tuple[Device, str]:
+    """Generate an OpenVPN client config, store it as a Device (counts toward
+    device_limit like VLESS), and return (device, config_text)."""
+    from app.services.openvpn_client import generate as ovpn_generate
+
+    if len(sub.devices) >= sub.device_limit:
+        raise ValueError("device_limit_reached")
+    device_name = name or f"Устройство {len(sub.devices) + 1}"
+    config_text = await ovpn_generate(device_name)
+    device = Device(
+        subscription_id=sub.id,
+        protocol="openvpn",
+        name=device_name,
+        raw_config=config_text,
+    )
+    db.add(device)
+    await db.flush()
+    return device, config_text
+
+
 async def revoke_device(db: AsyncSession, device: Device) -> None:
-    try:
-        await xui.disable_client(device.client_uuid, device.xui_email)
-    except Exception as e:
-        log.warning("revoke: disable_client failed: %s", e)
-    try:
-        await xui.delete_client(device.client_uuid)
-    except Exception as e:
-        log.warning("revoke: delete_client failed: %s", e)
+    if device.protocol == "vless":
+        try:
+            await xui.disable_client(device.client_uuid, device.xui_email)
+        except Exception as e:
+            log.warning("revoke: disable_client failed: %s", e)
+        try:
+            await xui.delete_client(device.client_uuid)
+        except Exception as e:
+            log.warning("revoke: delete_client failed: %s", e)
+    # WireGuard/OpenVPN peers aren't revoked server-side yet (no per-peer
+    # removal API wired up); dropping the DB row at least frees up the
+    # device_limit slot and stops it from showing in /myvpn.
     await db.delete(device)
     await db.flush()
 
 
 async def rotate_device_key(db: AsyncSession, device: Device, sub: Subscription) -> Device:
-    """Generate fresh UUID for one specific device. Old key stops working."""
+    """Generate a fresh key/config for one specific device. Old key stops working."""
+    if device.protocol == "wireguard":
+        from app.services.wireguard_client import generate as wg_generate
+
+        device.raw_config = await wg_generate(device.name or "Устройство")
+        await db.flush()
+        return device
+
+    if device.protocol == "openvpn":
+        from app.services.openvpn_client import generate as ovpn_generate
+
+        device.raw_config = await ovpn_generate(device.name or "Устройство")
+        await db.flush()
+        return device
+
     try:
         await xui.disable_client(device.client_uuid, device.xui_email)
     except Exception:

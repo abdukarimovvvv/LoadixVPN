@@ -37,13 +37,23 @@ router = APIRouter(dependencies=[Depends(require_internal_token)])
 
 
 def _device_with_qr(d: Device) -> DeviceWithQR:
+    # WireGuard configs are short enough to QR; OpenVPN's embedded certs are
+    # not (exceeds the QR spec's ~2.9KB cap), so it ships as a file only.
+    if d.protocol == "vless":
+        qr_source = d.vless_uri
+    elif d.protocol == "wireguard":
+        qr_source = d.raw_config
+    else:
+        qr_source = None
     return DeviceWithQR(
         id=d.id,
+        protocol=d.protocol,
         client_uuid=d.client_uuid,
         name=d.name,
         vless_uri=d.vless_uri,
+        raw_config=d.raw_config,
         created_at=d.created_at,
-        qr_base64=make_qr_png_base64(d.vless_uri),
+        qr_base64=make_qr_png_base64(qr_source) if qr_source else None,
     )
 
 
@@ -208,7 +218,7 @@ async def get_wireguard_config(
     payload: VpnConfigIn,
     db: AsyncSession = Depends(get_db),
 ) -> VpnRawConfigOut:
-    from app.services.wireguard_client import generate as wg_generate
+    from app.services.subscription_service import add_wireguard_device
 
     res = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = res.scalar_one_or_none()
@@ -221,9 +231,12 @@ async def get_wireguard_config(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no active subscription")
     name = (payload.name or f"user_{telegram_id}")[:64]
     try:
-        config = await wg_generate(name)
+        _, config = await add_wireguard_device(db, sub=sub, name=name)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="device_limit_reached")
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    await db.commit()
     return VpnRawConfigOut(config=config, protocol="wireguard", qr_base64=make_qr_png_base64(config))
 
 
@@ -233,7 +246,7 @@ async def get_openvpn_config(
     payload: VpnConfigIn,
     db: AsyncSession = Depends(get_db),
 ) -> VpnRawConfigOut:
-    from app.services.openvpn_client import generate as ovpn_generate
+    from app.services.subscription_service import add_openvpn_device
 
     res = await db.execute(select(User).where(User.telegram_id == telegram_id))
     user = res.scalar_one_or_none()
@@ -246,9 +259,12 @@ async def get_openvpn_config(
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no active subscription")
     name = (payload.name or f"user_{telegram_id}")[:64]
     try:
-        config = await ovpn_generate(name)
+        _, config = await add_openvpn_device(db, sub=sub, name=name)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="device_limit_reached")
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
+    await db.commit()
     # .ovpn configs embed full certs/keys and are far too large to fit in a QR
     # code (QR spec caps out at version 40, ~2.9KB); ship the file only.
     return VpnRawConfigOut(config=config, protocol="openvpn")

@@ -10,14 +10,16 @@ class DeviceOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
     id: UUID
-    client_uuid: str
+    protocol: str
+    client_uuid: str | None = None
     name: str | None
-    vless_uri: str
+    vless_uri: str | None = None
+    raw_config: str | None = None
     created_at: datetime
 
 
 class DeviceWithQR(DeviceOut):
-    qr_base64: str
+    qr_base64: str | None = None
 
 
 class DeviceAddIn(BaseModel):
