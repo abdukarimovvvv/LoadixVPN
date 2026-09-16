@@ -2,9 +2,11 @@ services:
   postgres:
     image: postgres:16
     restart: unless-stopped
+    env_file:
+      - .env
     environment:
       POSTGRES_USER: loadix
-      POSTGRES_PASSWORD: loadix
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-loadix}
       POSTGRES_DB: loadix
     volumes:
       - pgdata:/var/lib/postgresql/data

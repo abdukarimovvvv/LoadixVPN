@@ -1,8 +1,8 @@
 from __future__ import annotations
 
 import asyncio
-import json
 import logging
+import re
 import time
 from dataclasses import dataclass
 
@@ -38,6 +38,7 @@ class XUIClient:
         self._inbound_id = settings.XUI_INBOUND_ID
         self._stub = settings.XUI_STUB
         self._cookie: str | None = None
+        self._csrf_token: str | None = None
         self._cookie_expires_at: float = 0
         self._lock = asyncio.Lock()
 
@@ -45,13 +46,24 @@ class XUIClient:
     def stub(self) -> bool:
         return self._stub
 
+    async def _fetch_csrf_token(self, client: httpx.AsyncClient) -> str:
+        r = await client.get(f"{self._base_url}/", timeout=15)
+        r.raise_for_status()
+        match = re.search(r'name="csrf-token" content="([^"]+)"', r.text)
+        if not match:
+            raise XUIError("could not find csrf-token on panel home page")
+        # cookies set on this GET (pre-login session) carry over via the client's jar
+        return match.group(1)
+
     async def _login(self, client: httpx.AsyncClient) -> None:
         async with self._lock:
             if self._cookie and time.time() < self._cookie_expires_at - 30:
                 return
+            csrf_token = await self._fetch_csrf_token(client)
             r = await client.post(
                 f"{self._base_url}/login",
-                data={"username": self._username, "password": self._password},
+                json={"username": self._username, "password": self._password},
+                headers={"X-CSRF-Token": csrf_token},
                 timeout=15,
             )
             if r.status_code != 200:
@@ -59,7 +71,8 @@ class XUIClient:
             data = r.json()
             if not data.get("success"):
                 raise XUIError(f"login failed: {data}")
-            self._cookie = "; ".join(f"{k}={v}" for k, v in r.cookies.items())
+            self._cookie = "; ".join(f"{k}={v}" for k, v in client.cookies.items())
+            self._csrf_token = csrf_token
             self._cookie_expires_at = time.time() + 50 * 60
 
     async def _request(self, method: str, path: str, **kwargs) -> dict:
@@ -71,16 +84,30 @@ class XUIClient:
             headers = kwargs.pop("headers", {}) or {}
             if self._cookie:
                 headers["Cookie"] = self._cookie
+            if self._csrf_token:
+                headers["X-CSRF-Token"] = self._csrf_token
             r = await client.request(method, f"{self._base_url}{path}", headers=headers, timeout=20, **kwargs)
         if r.status_code != 200:
             raise XUIError(f"{method} {path} -> {r.status_code} {r.text}")
         return r.json()
 
-    async def add_client(self, data: XUIClientData) -> None:
-        if self._stub:
-            log.info("XUI STUB add_client uuid=%s email=%s", data.client_uuid, data.email)
-            return
-        client_obj = {
+    async def _get_inbound(self) -> dict:
+        resp = await self._request("GET", f"/panel/api/inbounds/get/{self._inbound_id}")
+        obj = resp.get("obj")
+        if not obj:
+            raise XUIError(f"get inbound {self._inbound_id} failed: {resp}")
+        return obj
+
+    async def _update_inbound(self, inbound: dict) -> None:
+        resp = await self._request(
+            "POST", f"/panel/api/inbounds/update/{self._inbound_id}", json=inbound
+        )
+        if not resp.get("success"):
+            raise XUIError(f"update inbound failed: {resp}")
+
+    @staticmethod
+    def _client_obj(data: XUIClientData) -> dict:
+        return {
             "id": data.client_uuid,
             "flow": data.flow,
             "email": data.email,
@@ -88,62 +115,58 @@ class XUIClient:
             "totalGB": data.total_gb * 1024 * 1024 * 1024,
             "expiryTime": data.expire_ts_ms,
             "enable": data.enable,
-            "tgId": "",
+            "tgId": 0,
             "subId": "",
         }
-        payload = {
-            "id": self._inbound_id,
-            "settings": json.dumps({"clients": [client_obj]}),
-        }
-        resp = await self._request("POST", "/panel/api/inbounds/addClient", json=payload)
-        if not resp.get("success"):
-            raise XUIError(f"addClient failed: {resp}")
+
+    async def add_client(self, data: XUIClientData) -> None:
+        if self._stub:
+            log.info("XUI STUB add_client uuid=%s email=%s", data.client_uuid, data.email)
+            return
+        inbound = await self._get_inbound()
+        clients = inbound["settings"]["clients"]
+        clients[:] = [c for c in clients if c.get("id") != data.client_uuid]
+        clients.append(self._client_obj(data))
+        await self._update_inbound(inbound)
 
     async def update_client(self, data: XUIClientData) -> None:
         if self._stub:
             log.info("XUI STUB update_client uuid=%s", data.client_uuid)
             return
-        client_obj = {
-            "id": data.client_uuid,
-            "flow": data.flow,
-            "email": data.email,
-            "limitIp": data.limit_ip,
-            "totalGB": data.total_gb * 1024 * 1024 * 1024,
-            "expiryTime": data.expire_ts_ms,
-            "enable": data.enable,
-            "tgId": "",
-            "subId": "",
-        }
-        payload = {
-            "id": self._inbound_id,
-            "settings": json.dumps({"clients": [client_obj]}),
-        }
-        resp = await self._request(
-            "POST", f"/panel/api/inbounds/updateClient/{data.client_uuid}", json=payload
-        )
-        if not resp.get("success"):
-            raise XUIError(f"updateClient failed: {resp}")
+        inbound = await self._get_inbound()
+        clients = inbound["settings"]["clients"]
+        clients[:] = [c for c in clients if c.get("id") != data.client_uuid]
+        clients.append(self._client_obj(data))
+        await self._update_inbound(inbound)
 
     async def disable_client(self, client_uuid: str, email: str) -> None:
         if self._stub:
             log.info("XUI STUB disable_client uuid=%s", client_uuid)
             return
-        client_obj = {"id": client_uuid, "email": email, "enable": False}
-        payload = {"id": self._inbound_id, "settings": json.dumps({"clients": [client_obj]})}
-        await self._request("POST", f"/panel/api/inbounds/updateClient/{client_uuid}", json=payload)
+        inbound = await self._get_inbound()
+        clients = inbound["settings"]["clients"]
+        for c in clients:
+            if c.get("id") == client_uuid:
+                c["enable"] = False
+        await self._update_inbound(inbound)
 
     async def delete_client(self, client_uuid: str) -> None:
         if self._stub:
             log.info("XUI STUB delete_client uuid=%s", client_uuid)
             return
-        await self._request("POST", f"/panel/api/inbounds/{self._inbound_id}/delClient/{client_uuid}")
+        inbound = await self._get_inbound()
+        clients = inbound["settings"]["clients"]
+        clients[:] = [c for c in clients if c.get("id") != client_uuid]
+        await self._update_inbound(inbound)
 
     async def get_client_traffic(self, email: str) -> int:
         if self._stub:
             return 0
-        resp = await self._request("GET", f"/panel/api/inbounds/getClientTraffics/{email}")
-        obj = resp.get("obj") or {}
-        return int(obj.get("up", 0)) + int(obj.get("down", 0))
+        inbound = await self._get_inbound()
+        for stat in inbound.get("clientStats", []):
+            if stat.get("email") == email:
+                return int(stat.get("up", 0)) + int(stat.get("down", 0))
+        return 0
 
 
 xui = XUIClient()
