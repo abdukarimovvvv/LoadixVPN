@@ -249,7 +249,9 @@ async def get_openvpn_config(
         config = await ovpn_generate(name)
     except RuntimeError as e:
         raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=str(e))
-    return VpnRawConfigOut(config=config, protocol="openvpn", qr_base64=make_qr_png_base64(config))
+    # .ovpn configs embed full certs/keys and are far too large to fit in a QR
+    # code (QR spec caps out at version 40, ~2.9KB); ship the file only.
+    return VpnRawConfigOut(config=config, protocol="openvpn")
 
 
 @router.post("/subscription/{telegram_id}/devices/{device_id}/rotate", response_model=DeviceWithQR)

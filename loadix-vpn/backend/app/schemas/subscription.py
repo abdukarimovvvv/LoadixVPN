@@ -62,4 +62,4 @@ class VpnConfigIn(BaseModel):
 class VpnRawConfigOut(BaseModel):
     config: str
     protocol: str
-    qr_base64: str
+    qr_base64: str | None = None
