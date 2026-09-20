@@ -21,6 +21,7 @@ from bot.services.backend_client import (
     BackendError,
     add_device,
     delete_device,
+    get_hysteria2_config,
     get_openvpn_config,
     get_subscription,
     get_wireguard_config,
@@ -91,6 +92,12 @@ def _device_caption(sub: dict, dev: dict) -> str:
         )
     if protocol == "wireguard":
         return header + "👇 Сканируй QR в приложении WireGuard, или используй файл конфига ниже."
+    if protocol == "hysteria2":
+        return header + (
+            "👇 Сканируй QR в приложении с поддержкой Hysteria2 (например, v2RayTun, NekoBox), "
+            "или скопируй ссылку:\n\n"
+            f"<code>{dev.get('raw_config', '')}</code>"
+        )
     return header + "👇 Импортируйте файл конфига ниже в OpenVPN Connect."
 
 
@@ -190,8 +197,9 @@ async def add_device_got_name(message: Message, state: FSMContext) -> None:
     await screen_text(
         message,
         "📡 <b>Выберите протокол</b>\n\n"
-        "• <b>VLESS / Reality</b> — самый быстрый и незаметный, работает на порту 443. Рекомендуем.\n"
-        "• <b>WireGuard</b> — стабильный, отличный выбор если VLESS не работает.\n"
+        "• <b>Hysteria2</b> — новый и быстрый, хорошо обходит блокировки. Рекомендуем попробовать первым.\n"
+        "• <b>WireGuard</b> — стабильный, отличный выбор если что-то не работает.\n"
+        "• <b>VLESS / Reality</b> — быстрый, работает на порту 443.\n"
         "• <b>OpenVPN</b> — классика, совместим с большинством устройств.\n\n"
         "⚠️ Если один протокол не работает — попробуйте другой.",
         reply_markup=protocol_select_kb(),
@@ -238,6 +246,33 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
             + "\n\n💡 Не работает? Попробуйте WireGuard или OpenVPN — нажмите /myvpn → Добавить устройство.",
             reply_markup=device_actions_kb(dev["id"], can_delete=len(sub["devices"]) > 1),
             delete_user_msg=False,
+        )
+
+    elif protocol == "hysteria2":
+        try:
+            result = await get_hysteria2_config(cb.from_user.id, name)
+        except BackendError as e:
+            if e.status_code == 404:
+                await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+            elif e.status_code == 409:
+                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
+            else:
+                log.warning("hysteria2 config failed: %s", e)
+                await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
+            return
+        config_text = result["config"]
+        png = base64.b64decode(result["qr_base64"])
+        await cb.message.answer_photo(
+            BufferedInputFile(png, filename="loadix-hy2.png"),
+            caption=(
+                "🚀 <b>Hysteria2 ключ готов</b>\n\n"
+                "📲 Как использовать:\n"
+                "• <b>Android/iOS</b>: приложение <b>v2RayTun</b> / <b>NekoBox</b> → Сканировать QR-код\n"
+                "• Или скопируйте ссылку ниже\n\n"
+                f"<code>{config_text}</code>\n\n"
+                "⚠️ Не работает? Попробуйте WireGuard или VLESS — /myvpn → Добавить устройство."
+            ),
+            parse_mode="HTML",
         )
 
     elif protocol == "wireguard":

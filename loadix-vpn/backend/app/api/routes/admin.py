@@ -381,7 +381,7 @@ async def admin_grant(
                 created_at=d.created_at,
                 qr_base64=(
                     make_qr_png_base64(d.vless_uri if d.protocol == "vless" else d.raw_config)
-                    if d.protocol in ("vless", "wireguard")
+                    if d.protocol in ("vless", "wireguard", "hysteria2")
                     else None
                 ),
             )

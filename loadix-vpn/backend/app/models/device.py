@@ -26,6 +26,7 @@ class Device(Base):
     name: Mapped[str | None] = mapped_column(String(64), nullable=True)
     vless_uri: Mapped[str | None] = mapped_column(String, nullable=True)
     raw_config: Mapped[str | None] = mapped_column(String, nullable=True)
+    hysteria_password: Mapped[str | None] = mapped_column(String(64), unique=True, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), server_default=func.now(), nullable=False)
 
     subscription = relationship("Subscription", back_populates="devices")

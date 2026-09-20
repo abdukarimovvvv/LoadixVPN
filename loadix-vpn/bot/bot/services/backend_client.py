@@ -170,6 +170,15 @@ async def delete_device(telegram_id: int, device_id: str) -> dict:
     )
 
 
+async def get_hysteria2_config(telegram_id: int, name: str | None) -> dict:
+    return await _request(
+        "POST",
+        f"/api/subscription/{telegram_id}/hysteria2",
+        telegram_id=telegram_id,
+        json={"name": name},
+    )
+
+
 async def get_wireguard_config(telegram_id: int, name: str | None) -> dict:
     return await _request(
         "POST",

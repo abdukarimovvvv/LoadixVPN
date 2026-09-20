@@ -37,11 +37,12 @@ router = APIRouter(dependencies=[Depends(require_internal_token)])
 
 
 def _device_with_qr(d: Device) -> DeviceWithQR:
-    # WireGuard configs are short enough to QR; OpenVPN's embedded certs are
-    # not (exceeds the QR spec's ~2.9KB cap), so it ships as a file only.
+    # WireGuard configs and Hysteria2 share URIs are short enough to QR;
+    # OpenVPN's embedded certs are not (exceeds the QR spec's ~2.9KB cap),
+    # so it ships as a file only.
     if d.protocol == "vless":
         qr_source = d.vless_uri
-    elif d.protocol == "wireguard":
+    elif d.protocol in ("wireguard", "hysteria2"):
         qr_source = d.raw_config
     else:
         qr_source = None
@@ -210,6 +211,32 @@ async def delete_subscription_device(
     await revoke_device(db, dev)
     await db.commit()
     return {"ok": True}
+
+
+@router.post("/subscription/{telegram_id}/hysteria2", response_model=VpnRawConfigOut)
+async def get_hysteria2_config(
+    telegram_id: int,
+    payload: VpnConfigIn,
+    db: AsyncSession = Depends(get_db),
+) -> VpnRawConfigOut:
+    from app.services.subscription_service import add_hysteria_device
+
+    res = await db.execute(select(User).where(User.telegram_id == telegram_id))
+    user = res.scalar_one_or_none()
+    if not user:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="user not found")
+    if user.is_banned:
+        raise HTTPException(status_code=status.HTTP_403_FORBIDDEN, detail="user is banned")
+    sub = await get_active_subscription(db, user.id)
+    if not sub:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="no active subscription")
+    name = (payload.name or f"user_{telegram_id}")[:64]
+    try:
+        _, uri = await add_hysteria_device(db, sub=sub, name=name)
+    except ValueError:
+        raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="device_limit_reached")
+    await db.commit()
+    return VpnRawConfigOut(config=uri, protocol="hysteria2", qr_base64=make_qr_png_base64(uri))
 
 
 @router.post("/subscription/{telegram_id}/wireguard", response_model=VpnRawConfigOut)

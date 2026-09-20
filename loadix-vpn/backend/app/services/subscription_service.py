@@ -265,6 +265,36 @@ async def add_openvpn_device(
     return device, config_text
 
 
+async def add_hysteria_device(
+    db: AsyncSession,
+    *,
+    sub: Subscription,
+    name: str | None,
+) -> tuple[Device, str]:
+    """Generate a Hysteria2 password, store it as a Device (counts toward
+    device_limit like VLESS), and return (device, share_uri). The standalone
+    Hysteria2 server authenticates clients via an HTTP callback
+    (see hysteria_auth.py) that checks this password against the DB, so
+    there's no server-side peer config to write here."""
+    from app.services.hysteria_client import build_uri, generate_password
+
+    if len(sub.devices) >= sub.device_limit:
+        raise ValueError("device_limit_reached")
+    device_name = name or f"Устройство {len(sub.devices) + 1}"
+    password = generate_password()
+    uri = build_uri(password, device_name)
+    device = Device(
+        subscription_id=sub.id,
+        protocol="hysteria2",
+        name=device_name,
+        hysteria_password=password,
+        raw_config=uri,
+    )
+    db.add(device)
+    await db.flush()
+    return device, uri
+
+
 async def revoke_device(db: AsyncSession, device: Device) -> None:
     if device.protocol == "vless":
         try:
@@ -295,6 +325,15 @@ async def rotate_device_key(db: AsyncSession, device: Device, sub: Subscription)
         from app.services.openvpn_client import generate as ovpn_generate
 
         device.raw_config = await ovpn_generate(device.name or "Устройство")
+        await db.flush()
+        return device
+
+    if device.protocol == "hysteria2":
+        from app.services.hysteria_client import build_uri, generate_password
+
+        new_password = generate_password()
+        device.hysteria_password = new_password
+        device.raw_config = build_uri(new_password, device.name or "Устройство")
         await db.flush()
         return device
 

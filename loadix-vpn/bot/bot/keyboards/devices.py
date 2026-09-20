@@ -30,8 +30,9 @@ def device_actions_kb(device_id: str, can_delete: bool) -> InlineKeyboardMarkup:
 def protocol_select_kb() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
-            [InlineKeyboardButton(text="⚡ VLESS / Reality", callback_data="proto:vless")],
+            [InlineKeyboardButton(text="🚀 Hysteria2", callback_data="proto:hysteria2")],
             [InlineKeyboardButton(text="🔒 WireGuard", callback_data="proto:wireguard")],
+            [InlineKeyboardButton(text="⚡ VLESS / Reality", callback_data="proto:vless")],
             [InlineKeyboardButton(text="🛡 OpenVPN", callback_data="proto:openvpn")],
             [InlineKeyboardButton(text="‹ Отмена", callback_data="dev:list")],
         ]
