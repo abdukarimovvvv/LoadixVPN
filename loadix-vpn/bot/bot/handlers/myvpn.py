@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import base64
 import logging
+import re
 from datetime import datetime
 
 from aiogram import F, Router
@@ -15,6 +16,7 @@ from bot.keyboards.devices import (
     device_delete_confirm_kb,
     devices_list_kb,
     protocol_select_kb,
+    server_select_kb,
 )
 from bot.keyboards.inline import no_subscription_kb
 from bot.services.backend_client import (
@@ -25,6 +27,7 @@ from bot.services.backend_client import (
     get_openvpn_config,
     get_subscription,
     get_wireguard_config,
+    list_servers,
     rotate_device,
 )
 from bot.services.screen import screen_photo, screen_text
@@ -35,7 +38,31 @@ router = Router(name="myvpn")
 
 class DeviceStates(StatesGroup):
     waiting_name = State()
+    waiting_server = State()
     waiting_protocol = State()
+
+
+_CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _safe_filename_part(name: str | None, fallback: str = "vpn") -> str:
+    """Transliterate + strip a user-supplied device name down to characters
+    every WireGuard client (including Android TV's, which derives the
+    tunnel's displayed name from the .conf filename) can parse safely.
+    Cyrillic/spaces/punctuation in the filename were showing up as a
+    garbled/blank tunnel name on TV."""
+    if not name:
+        return fallback
+    lowered = name.lower()
+    translit = "".join(_CYRILLIC_TO_LATIN.get(ch, ch) for ch in lowered)
+    safe = re.sub(r"[^a-z0-9_-]+", "_", translit).strip("_")
+    return safe or fallback
 
 
 def _fmt_days_left(expire_iso: str) -> str:
@@ -91,7 +118,7 @@ def _device_caption(sub: dict, dev: dict) -> str:
             f"<code>{dev['vless_uri']}</code>"
         )
     if protocol == "wireguard":
-        return header + "👇 Сканируй QR в приложении WireGuard, или используй файл конфига ниже."
+        return header + "👇 Импортируйте файл конфига ниже в приложение WireGuard."
     if protocol == "hysteria2":
         return header + (
             "👇 Сканируй QR в приложении с поддержкой Hysteria2 (например, v2RayTun, NekoBox), "
@@ -104,14 +131,17 @@ def _device_caption(sub: dict, dev: dict) -> str:
 async def _send_device_card(message: Message, sub: dict, dev: dict, *, can_delete: bool, prefix: str = "") -> None:
     caption = prefix + _device_caption(sub, dev)
     kb = device_actions_kb(dev["id"], can_delete=can_delete)
-    if dev.get("qr_base64"):
+    # WireGuard ships as a .conf file only now — TV/box clients (and some
+    # desktop apps) don't scan QR codes anyway, and a wrong/garbled tunnel
+    # name from a QR-derived import was worse than just importing the file.
+    if dev.get("qr_base64") and dev.get("protocol") != "wireguard":
         png = base64.b64decode(dev["qr_base64"])
         await screen_photo(message, BufferedInputFile(png, filename="loadix-key.png"), caption, reply_markup=kb, delete_user_msg=False)
     else:
         await screen_text(message, caption, reply_markup=kb, delete_user_msg=False)
     if dev.get("protocol") in ("wireguard", "openvpn") and dev.get("raw_config"):
         ext = "conf" if dev["protocol"] == "wireguard" else "ovpn"
-        file_name = f"loadix-{dev['protocol']}-{(dev.get('name') or 'vpn').replace(' ', '_')}.{ext}"
+        file_name = f"loadix-{dev['protocol']}-{_safe_filename_part(dev.get('name'))}.{ext}"
         await message.answer_document(BufferedInputFile(dev["raw_config"].encode(), filename=file_name))
 
 
@@ -186,13 +216,7 @@ async def cb_add_start(cb: CallbackQuery, state: FSMContext) -> None:
     await cb.answer()
 
 
-@router.message(DeviceStates.waiting_name, F.text)
-async def add_device_got_name(message: Message, state: FSMContext) -> None:
-    if not message.from_user:
-        return
-    raw = (message.text or "").strip()
-    name = None if raw in {"-", ""} else raw[:64]
-    await state.update_data(device_name=name)
+async def _prompt_protocol(message: Message, state: FSMContext) -> None:
     await state.set_state(DeviceStates.waiting_protocol)
     await screen_text(
         message,
@@ -207,39 +231,102 @@ async def add_device_got_name(message: Message, state: FSMContext) -> None:
     )
 
 
-@router.callback_query(DeviceStates.waiting_protocol, F.data.startswith("proto:"))
-async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
+@router.message(DeviceStates.waiting_name, F.text)
+async def add_device_got_name(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        return
+    raw = (message.text or "").strip()
+    name = None if raw in {"-", ""} else raw[:64]
+    await state.update_data(device_name=name)
+
+    try:
+        servers = await list_servers()
+    except BackendError:
+        servers = []
+
+    # Only bother the user with a location pick when there's an actual choice —
+    # a single-server deployment (or an older backend without /api/servers
+    # data yet) goes straight to protocol selection, unchanged from before.
+    if len(servers) > 1:
+        await state.update_data(servers=servers)
+        await state.set_state(DeviceStates.waiting_server)
+        await screen_text(
+            message,
+            "🌍 <b>Выберите сервер</b>\n\nОт локации зависит скорость и обход блокировок в вашем регионе.",
+            reply_markup=server_select_kb(servers),
+            delete_user_msg=False,
+        )
+        return
+
+    if len(servers) == 1:
+        server = servers[0]
+        await state.update_data(server_code=server["code"])
+        protocols = server.get("protocols") or []
+        if len(protocols) == 1:
+            # Single-protocol server (e.g. a VLESS-only location) — skip the
+            # picker entirely and provision right away.
+            data = await state.get_data()
+            await state.clear()
+            await _provision_device(message, message.from_user.id, protocols[0], data.get("device_name"), server["code"])
+            return
+    await _prompt_protocol(message, state)
+
+
+@router.callback_query(DeviceStates.waiting_server, F.data.startswith("srv:"))
+async def cb_server_selected(cb: CallbackQuery, state: FSMContext) -> None:
     if not cb.from_user or not cb.message:
         await cb.answer()
         return
-
-    protocol = cb.data.split(":", 1)[1]  # vless / wireguard / openvpn
+    server_code = cb.data.split(":", 1)[1]
     data = await state.get_data()
-    name = data.get("device_name")
-    await state.clear()
+    servers = data.get("servers") or []
+    server = next((s for s in servers if s["code"] == server_code), None)
+    protocols = (server or {}).get("protocols") or []
 
-    await cb.answer("⏳ Генерирую ключ…")
+    await cb.answer()
 
+    if len(protocols) == 1:
+        # Single-protocol server — skip the picker, provision immediately.
+        name = data.get("device_name")
+        await state.clear()
+        await _provision_device(cb.message, cb.from_user.id, protocols[0], name, server_code)
+        return
+
+    await state.update_data(server_code=server_code)
+    await _prompt_protocol(cb.message, state)
+
+
+async def _provision_device(
+    message: Message,
+    telegram_id: int,
+    protocol: str,
+    name: str | None,
+    server_code: str | None,
+) -> None:
+    """Actually create the device on the backend and deliver the key/config
+    to the user. Shared by the normal protocol-picker flow and the
+    single-protocol-server shortcut (e.g. a VLESS-only location skips
+    straight here — see add_device_got_name/cb_server_selected)."""
     if protocol == "vless":
         try:
-            dev = await add_device(cb.from_user.id, name)
+            dev = await add_device(telegram_id, name, server_code)
         except BackendError as e:
             if e.status_code == 409:
-                await screen_text(cb.message, f"⚠️ {e.message}", delete_user_msg=False)
+                await screen_text(message, f"⚠️ {e.message}", delete_user_msg=False)
             elif e.status_code == 404:
-                await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+                await screen_text(message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
             else:
                 log.warning("add device failed: %s", e)
-                await screen_text(cb.message, f"⚠️ {e.message}", delete_user_msg=False)
+                await screen_text(message, f"⚠️ {e.message}", delete_user_msg=False)
             return
         try:
-            sub = await get_subscription(cb.from_user.id)
+            sub = await get_subscription(telegram_id)
         except BackendError:
-            await screen_text(cb.message, "Устройство создано. Откройте /myvpn.", delete_user_msg=False)
+            await screen_text(message, "Устройство создано. Откройте /myvpn.", delete_user_msg=False)
             return
         png = base64.b64decode(dev["qr_base64"])
         await screen_photo(
-            cb.message,
+            message,
             BufferedInputFile(png, filename="loadix-vless.png"),
             "✨ <b>VLESS ключ готов</b>\n\n"
             + _device_caption(sub, dev)
@@ -250,19 +337,19 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
 
     elif protocol == "hysteria2":
         try:
-            result = await get_hysteria2_config(cb.from_user.id, name)
+            result = await get_hysteria2_config(telegram_id, name, server_code)
         except BackendError as e:
             if e.status_code == 404:
-                await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+                await screen_text(message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
             elif e.status_code == 409:
-                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
+                await screen_text(message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
             else:
                 log.warning("hysteria2 config failed: %s", e)
-                await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
+                await screen_text(message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
             return
         config_text = result["config"]
         png = base64.b64decode(result["qr_base64"])
-        await cb.message.answer_photo(
+        await message.answer_photo(
             BufferedInputFile(png, filename="loadix-hy2.png"),
             caption=(
                 "🚀 <b>Hysteria2 ключ готов</b>\n\n"
@@ -277,49 +364,48 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
 
     elif protocol == "wireguard":
         try:
-            result = await get_wireguard_config(cb.from_user.id, name)
+            result = await get_wireguard_config(telegram_id, name, server_code)
         except BackendError as e:
             if e.status_code == 404:
-                await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+                await screen_text(message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
             elif e.status_code == 409:
-                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
+                await screen_text(message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
             else:
                 log.warning("wireguard config failed: %s", e)
-                await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
+                await screen_text(message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
             return
         config_text = result["config"]
-        file_name = f"loadix-wg-{(name or 'vpn').replace(' ', '_')}.conf"
-        png = base64.b64decode(result["qr_base64"])
-        await cb.message.answer_photo(
-            BufferedInputFile(png, filename="loadix-wg.png"),
+        file_name = f"loadix-wg-{_safe_filename_part(name)}.conf"
+        # WireGuard ships as a .conf file only — no QR. Android TV and other
+        # box clients can't scan a QR anyway, and the file is what actually
+        # carries a clean tunnel name (see _safe_filename_part).
+        await message.answer_document(
+            BufferedInputFile(config_text.encode(), filename=file_name),
             caption=(
                 "✅ <b>WireGuard конфиг готов</b>\n\n"
                 "📲 Как использовать:\n"
-                "• <b>Android/iOS</b>: приложение <b>WireGuard</b> → «+» → Сканировать QR-код\n"
-                "• Или импортируйте файл конфига ниже\n\n"
+                "• <b>Android/iOS/TV</b>: приложение <b>WireGuard</b> → «+» → Импортировать из файла\n"
+                "• <b>Windows/Mac</b>: WireGuard → Import tunnel(s) from file\n\n"
                 "⚠️ Не работает? Попробуйте VLESS или OpenVPN — /myvpn → Добавить устройство."
             ),
             parse_mode="HTML",
         )
-        await cb.message.answer_document(
-            BufferedInputFile(config_text.encode(), filename=file_name),
-        )
 
     elif protocol == "openvpn":
         try:
-            result = await get_openvpn_config(cb.from_user.id, name)
+            result = await get_openvpn_config(telegram_id, name, server_code)
         except BackendError as e:
             if e.status_code == 404:
-                await screen_text(cb.message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
+                await screen_text(message, "Сначала оформите подписку.", reply_markup=no_subscription_kb())
             elif e.status_code == 409:
-                await screen_text(cb.message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
+                await screen_text(message, "⚠️ Достигнут лимит устройств для вашей подписки.", delete_user_msg=False)
             else:
                 log.warning("openvpn config failed: %s", e)
-                await screen_text(cb.message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
+                await screen_text(message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
             return
         config_text = result["config"]
-        file_name = f"loadix-ovpn-{(name or 'vpn').replace(' ', '_')}.ovpn"
-        await cb.message.answer_document(
+        file_name = f"loadix-ovpn-{_safe_filename_part(name)}.ovpn"
+        await message.answer_document(
             BufferedInputFile(config_text.encode(), filename=file_name),
             caption=(
                 "✅ <b>OpenVPN конфиг готов</b>\n\n"
@@ -331,6 +417,22 @@ async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
             ),
             parse_mode="HTML",
         )
+
+
+@router.callback_query(DeviceStates.waiting_protocol, F.data.startswith("proto:"))
+async def cb_protocol_selected(cb: CallbackQuery, state: FSMContext) -> None:
+    if not cb.from_user or not cb.message:
+        await cb.answer()
+        return
+
+    protocol = cb.data.split(":", 1)[1]  # hysteria2 / wireguard / vless / openvpn
+    data = await state.get_data()
+    name = data.get("device_name")
+    server_code = data.get("server_code")
+    await state.clear()
+
+    await cb.answer("⏳ Генерирую ключ…")
+    await _provision_device(cb.message, cb.from_user.id, protocol, name, server_code)
 
 
 @router.callback_query(F.data.startswith("dev:rotate:"))
