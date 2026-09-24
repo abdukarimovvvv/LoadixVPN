@@ -1,25 +1,42 @@
 from __future__ import annotations
 
 import secrets
-
-from app.core.config import settings
+from urllib.parse import quote
 
 SERVER_ADDR = "panel.loadix.cyou"
 SERVER_PORT = 38443
 
+# Salamander UDP obfuscation password (must match /etc/hysteria/config.yaml's
+# obfs.salamander.password on the server). Without this, every client's QUIC
+# packets carry Hysteria2's plain wire signature — easy for DPI to fingerprint
+# and rate-limit/drop even when the auth itself succeeds, which is what was
+# happening on Beeline mobile: connections authenticated fine but almost all
+# subsequent stream traffic timed out ("no recent network activity"), a
+# classic asymmetric-UDP-throttling pattern. Salamander wraps every packet in
+# per-connection obfuscation so it no longer matches a plain QUIC/Hysteria2
+# signature.
+OBFS_PASSWORD = "ii32TuAqMZSzKnWPz3q0AA"
+
 
 def generate_password() -> str:
-    """Hysteria2 auth is HTTP-callback based (see hysteria_auth.py) — the
-    standalone server has no per-peer config to write, so a device is just
-    a random password checked against the DB on every connection."""
+    """Hysteria2 auth is HTTP-callback based (see hysteria_auth.py) — each
+    node's standalone server has no per-peer config to write, so a device is
+    just a random password checked against the shared DB on every connection
+    (the node calls back into the one central backend regardless of which
+    server the device belongs to)."""
     return secrets.token_urlsafe(24)
 
 
-def build_uri(password: str, name: str) -> str:
-    from urllib.parse import quote
-
+def build_uri(password: str, name: str, *, server=None) -> str:
+    """Build a Hysteria2 share URI. Uses a specific Server row's own
+    host/port when given (multi-location support), else falls back to the
+    original hardcoded OVH values. Always includes Salamander obfs params —
+    every node's config.yaml must set the matching obfs.salamander.password."""
+    host = (server.hysteria_host if server and server.hysteria_host else None) or SERVER_ADDR
+    port = (server.hysteria_port if server and server.hysteria_port else None) or SERVER_PORT
     tag = quote(name or "loadix")
     return (
-        f"hysteria2://{quote(password)}@{SERVER_ADDR}:{SERVER_PORT}/"
-        f"?sni={SERVER_ADDR}#{tag}"
+        f"hysteria2://{quote(password)}@{host}:{port}/"
+        f"?sni={host}&obfs=salamander&obfs-password={quote(OBFS_PASSWORD)}"
+        f"#{tag}"
     )
