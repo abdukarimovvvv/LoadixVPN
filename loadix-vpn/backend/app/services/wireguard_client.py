@@ -6,6 +6,31 @@ import re
 
 log = logging.getLogger(__name__)
 
+_CYRILLIC_TO_LATIN = {
+    "а": "a", "б": "b", "в": "v", "г": "g", "д": "d", "е": "e", "ё": "e",
+    "ж": "zh", "з": "z", "и": "i", "й": "y", "к": "k", "л": "l", "м": "m",
+    "н": "n", "о": "o", "п": "p", "р": "r", "с": "s", "т": "t", "у": "u",
+    "ф": "f", "х": "h", "ц": "ts", "ч": "ch", "ш": "sh", "щ": "sch",
+    "ъ": "", "ы": "y", "ь": "", "э": "e", "ю": "yu", "я": "ya",
+}
+
+
+def _safe_wg_name(name: str, fallback: str = "device") -> str:
+    """Sanitize a device name for use in the WireGuard [Interface] comment.
+    Some WireGuard client apps (Android/iOS) derive the tunnel's displayed
+    name from this first comment line when importing a .conf — anything
+    outside plain ASCII letters/digits/spaces/hyphen (Cyrillic, emoji,
+    other punctuation) can make the app reject the file as having an
+    "invalid name" on import, even though the file itself is otherwise
+    valid WireGuard syntax."""
+    if not name:
+        return fallback
+    lowered = name.lower()
+    translit = "".join(_CYRILLIC_TO_LATIN.get(ch, ch) for ch in lowered)
+    safe = re.sub(r"[^a-zA-Z0-9 _-]+", "", translit).strip()
+    return safe or fallback
+
+
 WG_CONTAINER = "amnezia-wireguard"
 WG_CONF = "/opt/amnezia/wireguard/wg0.conf"
 WG_PSK_FILE = "/opt/amnezia/wireguard/wireguard_psk.key"
@@ -40,8 +65,18 @@ async def _exec_stdin(container: str, data: str, *cmd: str) -> str:
     return out.decode().strip()
 
 
-async def generate(name: str) -> str:
-    """Generate WireGuard client config, add peer to server, return .conf string."""
+async def generate(name: str, *, server=None) -> str:
+    """Generate WireGuard client config, add peer to server, return .conf string.
+
+    When `server` is given and isn't the local node, delegates to that
+    node's node-agent over HTTP instead (see node_agent_client.py) — the
+    local docker socket can only ever manage containers on this same host.
+    """
+    if server is not None and not server.is_local:
+        from app.services.node_agent_client import remote_generate
+
+        return await remote_generate(server, "wireguard", name)
+
     # 1. Generate client keys inside container
     priv = await _exec(WG_CONTAINER, "wg", "genkey")
     pub = await _exec_stdin(WG_CONTAINER, priv + "\n", "wg", "pubkey")
@@ -66,7 +101,7 @@ async def generate(name: str) -> str:
                 "allowed-ips", f"{client_ip}/32")
 
     # 5. Persist peer to config file for survive restarts
-    safe_name = name.replace("'", "").replace("\\", "")
+    safe_name = _safe_wg_name(name)
     peer_block = (
         f"\\n[Peer]\\n"
         f"# {safe_name}\\n"
