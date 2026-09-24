@@ -51,18 +51,34 @@ _CYRILLIC_TO_LATIN = {
 }
 
 
-def _safe_filename_part(name: str | None, fallback: str = "vpn") -> str:
+def _safe_filename_part(name: str | None, fallback: str = "vpn", max_len: int = 32) -> str:
     """Transliterate + strip a user-supplied device name down to characters
     every WireGuard client (including Android TV's, which derives the
     tunnel's displayed name from the .conf filename) can parse safely.
     Cyrillic/spaces/punctuation in the filename were showing up as a
-    garbled/blank tunnel name on TV."""
+    garbled/blank tunnel name on TV. `max_len` caps this piece's length —
+    the caller must additionally keep the *whole* basename (this plus any
+    prefix like "loadix-wg-") at or under 15 chars for WireGuard's official
+    app (see _wg_tunnel_filename), which enforces the Linux IFNAMSIZ
+    interface-name limit and rejects longer names as "Invalid name" on
+    import — this is what "Poco F8 Ultra" (-> loadix-wg-poco_f8_ultra,
+    23 chars) hit."""
     if not name:
         return fallback
     lowered = name.lower()
     translit = "".join(_CYRILLIC_TO_LATIN.get(ch, ch) for ch in lowered)
     safe = re.sub(r"[^a-z0-9_-]+", "_", translit).strip("_")
-    return safe or fallback
+    return (safe or fallback)[:max_len]
+
+
+def _wg_tunnel_filename(name: str | None) -> str:
+    """Build a WireGuard .conf filename whose basename (without extension)
+    stays within the official WireGuard app's 15-character tunnel-name
+    limit (Linux IFNAMSIZ, enforced even on Android/iOS where there's no
+    real netdev). No "loadix-wg-" prefix here — it alone would already eat
+    10 of the 15 chars, leaving almost nothing for the actual device name."""
+    safe = _safe_filename_part(name, fallback="vpn", max_len=15)
+    return f"{safe}.conf"
 
 
 def _fmt_days_left(expire_iso: str) -> str:
@@ -139,9 +155,11 @@ async def _send_device_card(message: Message, sub: dict, dev: dict, *, can_delet
         await screen_photo(message, BufferedInputFile(png, filename="loadix-key.png"), caption, reply_markup=kb, delete_user_msg=False)
     else:
         await screen_text(message, caption, reply_markup=kb, delete_user_msg=False)
-    if dev.get("protocol") in ("wireguard", "openvpn") and dev.get("raw_config"):
-        ext = "conf" if dev["protocol"] == "wireguard" else "ovpn"
-        file_name = f"loadix-{dev['protocol']}-{_safe_filename_part(dev.get('name'))}.{ext}"
+    if dev.get("protocol") == "wireguard" and dev.get("raw_config"):
+        file_name = _wg_tunnel_filename(dev.get("name"))
+        await message.answer_document(BufferedInputFile(dev["raw_config"].encode(), filename=file_name))
+    elif dev.get("protocol") == "openvpn" and dev.get("raw_config"):
+        file_name = f"loadix-ovpn-{_safe_filename_part(dev.get('name'))}.ovpn"
         await message.answer_document(BufferedInputFile(dev["raw_config"].encode(), filename=file_name))
 
 
@@ -375,7 +393,7 @@ async def _provision_device(
                 await screen_text(message, f"⚠️ {e.message}\n\nПопробуйте другой протокол.", delete_user_msg=False)
             return
         config_text = result["config"]
-        file_name = f"loadix-wg-{_safe_filename_part(name)}.conf"
+        file_name = _wg_tunnel_filename(name)
         # WireGuard ships as a .conf file only — no QR. Android TV and other
         # box clients can't scan a QR anyway, and the file is what actually
         # carries a clean tunnel name (see _safe_filename_part).
