@@ -5,6 +5,12 @@ from urllib.parse import quote
 
 SERVER_ADDR = "panel.loadix.cyou"
 SERVER_PORT = 38443
+# UDP port-hopping range, DNAT'd to SERVER_PORT via iptables on the server
+# (PREROUTING -p udp --dport 20000:50000 -j DNAT --to-destination :38443).
+# The client picks a random port in this range and can hop between them
+# across reconnects, so the ISP can't just rate-limit/block one fixed
+# destination port — it would have to block the whole range.
+PORT_HOP_RANGE = "20000-50000"
 
 # Salamander UDP obfuscation password (must match /etc/hysteria/config.yaml's
 # obfs.salamander.password on the server). Without this, every client's QUIC
@@ -35,8 +41,11 @@ def build_uri(password: str, name: str, *, server=None) -> str:
     host = (server.hysteria_host if server and server.hysteria_host else None) or SERVER_ADDR
     port = (server.hysteria_port if server and server.hysteria_port else None) or SERVER_PORT
     tag = quote(name or "loadix")
+    # mport enables client-side port hopping across PORT_HOP_RANGE; the base
+    # host:port stays as a fallback for clients that don't support mport.
     return (
         f"hysteria2://{quote(password)}@{host}:{port}/"
         f"?sni={host}&obfs=salamander&obfs-password={quote(OBFS_PASSWORD)}"
+        f"&mport={PORT_HOP_RANGE}"
         f"#{tag}"
     )
